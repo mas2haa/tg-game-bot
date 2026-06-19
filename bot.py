@@ -15,7 +15,7 @@ BOT_TOKEN = "8886532892:AAEKc4wjqvESk4WE-3lafn4W_3nj5e5dgI8"
 ADMIN_ID = 698479126  # твой Telegram ID — сюда приходит статистика
 
 # =============================================
-# ЗАДАНИЯ (добавляй/меняй сколько угодно!)
+# ЗАДАНИЯ — просто добавляй новые строки сюда!
 # =============================================
 TASKS = [
     "Подойди к незнакомому человеку и скажи ему комплимент",
@@ -29,12 +29,11 @@ TASKS = [
     "Запой любимую песню вслух — где бы ты ни был(а)",
     "Напиши доброе сообщение тому, с кем давно не общался(ась)",
 ]
-# Сюда потом просто добавляй новые задания в кавычках через запятую!
 
 # =============================================
-# СОСТОЯНИЯ ДИАЛОГА
+# СОСТОЯНИЯ ДИАЛОГА (теперь только 2 шага)
 # =============================================
-WAITING_NAME, WAITING_SURNAME, PLAYING = range(3)
+WAITING_FULLNAME, PLAYING = range(2)
 
 # =============================================
 # ФАЙЛ ДЛЯ ХРАНЕНИЯ ДАННЫХ ИГРОКОВ
@@ -58,7 +57,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     players = load_players()
 
-    # Если уже играл раньше — сбрасываем
     if user_id in players:
         del players[user_id]
         save_players(players)
@@ -66,39 +64,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Добро пожаловать в игру!\n\n"
         "Для начала давай познакомимся.\n"
-        "Как тебя зовут? Напиши своё *имя*:",
+        "Напиши своё *имя и фамилию* одним сообщением\n"
+        "_(например: Анна Иванова)_",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
-    return WAITING_NAME
+    return WAITING_FULLNAME
 
 # =============================================
-# ПОЛУЧАЕМ ИМЯ
+# ПОЛУЧАЕМ ИМЯ И ФАМИЛИЮ ВМЕСТЕ
 # =============================================
-async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.message.text.strip()
-    if len(name) < 2:
-        await update.message.reply_text("Пожалуйста, введи настоящее имя 😊")
-        return WAITING_NAME
+async def get_fullname(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    full_name = update.message.text.strip()
 
-    context.user_data["name"] = name
-    await update.message.reply_text(
-        f"Отлично, *{name}*! Теперь напиши свою *фамилию*:",
-        parse_mode="Markdown"
-    )
-    return WAITING_SURNAME
-
-# =============================================
-# ПОЛУЧАЕМ ФАМИЛИЮ → ПОКАЗЫВАЕМ ПРАВИЛА
-# =============================================
-async def get_surname(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    surname = update.message.text.strip()
-    if len(surname) < 2:
-        await update.message.reply_text("Пожалуйста, введи настоящую фамилию 😊")
-        return WAITING_SURNAME
-
-    context.user_data["surname"] = surname
-    full_name = f"{context.user_data['name']} {surname}"
+    # Проверяем что написано хотя бы два слова
+    parts = full_name.split()
+    if len(parts) < 2:
+        await update.message.reply_text(
+            "Пожалуйста, напиши *имя и фамилию* вместе\n"
+            "_(например: Анна Иванова)_ 😊",
+            parse_mode="Markdown"
+        )
+        return WAITING_FULLNAME
 
     # Сохраняем игрока
     user_id = str(update.effective_user.id)
@@ -111,9 +98,16 @@ async def get_surname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     save_players(players)
 
+    # Уведомляем админа о новом игроке
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"📝 Новый игрок зарегистрировался: *{full_name}*",
+        parse_mode="Markdown"
+    )
+
     # Показываем правила
     rules_text = (
-        f"✅ Отлично, *{full_name}*! Ты зарегистрирован(а)!\n\n"
+        f"✅ Отлично, *{full_name}*!\n\n"
         "📋 *Правила игры:*\n\n"
         "Ты должен(а) выполнить действие, которое сейчас появится на экране. "
         "На выполнение у тебя есть целый вечер.\n\n"
@@ -143,12 +137,21 @@ async def give_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     player = players[user_id]
 
-    # Выдаём случайное задание
     task = random.choice(TASKS)
     player["task"] = task
     player["status"] = "has_task"
     player["swap_used"] = False
     save_players(players)
+
+    # Уведомляем админа что игрок получил задание
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"🎯 *{player['full_name']}* получил(а) задание:\n"
+            f"_{task}_"
+        ),
+        parse_mode="Markdown"
+    )
 
     keyboard = ReplyKeyboardMarkup(
         [
@@ -187,8 +190,8 @@ async def task_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
-            f"🎉 *{full_name}* выполнил(а) задание!\n\n"
-            f"📌 Задание: _{task}_"
+            f"✅ *{full_name}* выполнил(а) задание!\n\n"
+            f"📌 Задание было: _{task}_"
         ),
         parse_mode="Markdown"
     )
@@ -221,12 +224,22 @@ async def swap_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return PLAYING
 
-    # Меняем задание
     old_task = player["task"]
     new_task = random.choice([t for t in TASKS if t != old_task])
     player["task"] = new_task
     player["swap_used"] = True
     save_players(players)
+
+    # Уведомляем админа о замене
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"🔄 *{player['full_name']}* поменял(а) задание\n"
+            f"Было: _{old_task}_\n"
+            f"Стало: _{new_task}_"
+        ),
+        parse_mode="Markdown"
+    )
 
     keyboard = ReplyKeyboardMarkup(
         [[KeyboardButton("✅ Выполнил(а)!")]],
@@ -263,8 +276,7 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            WAITING_SURNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_surname)],
+            WAITING_FULLNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fullname)],
             PLAYING: [
                 MessageHandler(filters.Regex("^✅ Я готов"), give_task),
                 MessageHandler(filters.Regex("^✅ Выполнил"), task_done),
